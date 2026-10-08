@@ -16,6 +16,8 @@ import queue as Queue
 import sys
 from sys import platform
 import os
+from dotenv import load_dotenv
+load_dotenv()
 
 Sessionid = ''
 username = ''
@@ -211,8 +213,8 @@ def login():
         global forumID
         tempJson = {
         "MACAddress": 'Bridge-Web',
-        "UserName":'@uuidb41322f3b6a34df1a69dc46d18d39569',
-        "Password":base64.b64decode('Q29zbWl0dWRlQnJpZGdlRGV2aWNl').decode('UTF-8'),
+        "UserName": os.environ["COSMITUDE_USERNAME"],
+        "Password": os.environ["COSMITUDE_PASSWORD"],
         "ServerID":'c9b6722d-5dbf-4b4f-a28e-692b4d26c1cf-7870eb8e-2f45-458a-9a70-d6b2d71ee871'
         }
         headers = {'Content-Type': 'application/json'}
