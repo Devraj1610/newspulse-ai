@@ -1,0 +1,12 @@
+__pycache__/
+news.db
+.env
+*.db
+*.sqlite
+*.pyc
+NewsSystemTemplate_*.txt
+*.log
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

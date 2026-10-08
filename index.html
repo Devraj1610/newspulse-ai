@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>News Pulse</title>
+<style>
+/* ── Google News Design Tokens ───────────────────────────────── */
+:root {
+  color-scheme: light dark;
+  --bg:          light-dark(#f8f9fa, #202124);
+  --surface:     light-dark(#ffffff, #2d2e31);
+  --surface2:    light-dark(#f1f3f4, #3c4043);
+  --border:      light-dark(#dadce0, #3c4043);
+  --border-sub:  light-dark(#e8eaed, #484b4e);
+  --ink:         light-dark(#202124, #e8eaed);
+  --ink2:        light-dark(#3c4043, #bdc1c6);
+  --mute:        light-dark(#5f6368, #9aa0a6);
+  --google-blue: light-dark(#1a73e8, #8ab4f8);
+  --google-red:  light-dark(#ea4335, #f28b82);
+  --google-green:light-dark(#188038, #81c995);
+  --google-yellow:light-dark(#fbbc04, #fdd663);
+  --ai-purple:   light-dark(#6b21a8, #d8b4fe);
+  --ai-bg:       light-dark(#f3e8ff, #3b0764);
+  --eli15-green: light-dark(#047857, #6ee7b7);
+  --eli15-bg:    light-dark(#ecfdf5, #022c22);
+  --radius:      8px;
+  accent-color: var(--google-blue);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.5 "Google Sans", Roboto, -apple-system, BlinkMacSystemFont, sans-serif;
+  min-height: 100dvh;
+}
+
+/* ── Top Google Header Bar ───────────────────────────────────── */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 16px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+
+.topbar-inner {
+  max-width: 1280px;
+  margin: 0 auto;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+}
+
+.brand-icon {
+  width: 32px; height: 32px;
+  border-radius: 6px;
+  background: var(--google-blue);
+  color: #fff;
+  display: grid; place-items: center;
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.brand-title {
+  font-size: 20px;
+  font-weight: 500;
+  letter-spacing: -.5px;
+  color: var(--ink);
+}
+
+.brand-title span { color: var(--google-blue); font-weight: 700; }
+
+/* Center Search */
+.search-container {
+  flex: 1;
+  max-width: 640px;
+  position: relative;
+}
+
+.search-container svg {
+  position: absolute;
+  left: 14px; top: 50%;
+  transform: translateY(-50%);
+  width: 18px; height: 18px;
+  fill: none;
+  stroke: var(--mute);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+#q {
+  width: 100%;
+  height: 44px;
+  padding: 0 16px 0 42px;
+  background: var(--surface2);
+  color: var(--ink);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 14px;
+  transition: background .15s, border-color .15s, box-shadow .15s;
+}
+#q::placeholder { color: var(--mute); }
+#q:focus-visible {
+  outline: none;
+  background: var(--surface);
+  border-color: var(--google-blue);
+  box-shadow: 0 1px 6px rgba(32,33,36,0.28);
+}
+
+/* ── Main Layout: Left Filter | Main Feed | Right Activity ────── */
+.layout-container {
+  max-width: 1280px;
+  margin: 20px auto 60px;
+  padding: 0 16px;
+  display: grid;
+  grid-template-columns: 220px 1fr 300px;
+  gap: 24px;
+  align-items: start;
+}
+
+/* ── Left Sidebar (Notification Filters) ─────────────────────── */
+.left-sidebar {
+  position: sticky;
+  top: 84px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.sidebar-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .8px;
+  color: var(--mute);
+  margin-bottom: 12px;
+}
+
+.filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.filter-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--ink2);
+  cursor: pointer;
+  padding: 4px 0;
+  user-select: none;
+}
+
+.filter-item input:checked + span {
+  color: var(--google-blue);
+  font-weight: 600;
+}
+
+/* ── Main Content Area ───────────────────────────────────────── */
+.main-content {
+  min-width: 0;
+}
+
+.feed-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.feed-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.feed-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.btn-batch-summarize {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 18px;
+  background: var(--ai-bg);
+  color: var(--ai-purple);
+  border: 1px solid color-mix(in srgb, var(--ai-purple) 30%, transparent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, transform .15s;
+}
+.btn-batch-summarize:hover { opacity: .9; transform: translateY(-1px); }
+
+.count-info {
+  font-size: 12px;
+  color: var(--mute);
+}
+.count-info strong { color: var(--ink); }
+
+/* Story Feed List */
+#list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.story-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.story-card:hover {
+  border-color: var(--border-sub);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+
+.story-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--mute);
+  margin-bottom: 6px;
+}
+
+.story-source {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  color: var(--google-blue);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.favicon-box {
+  width: 14px; height: 14px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--surface2);
+  display: inline-block;
+}
+.favicon-box img { width: 100%; height: 100%; object-fit: cover; }
+
+.story-title {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
+  margin-bottom: 8px;
+}
+
+.story-title a {
+  color: var(--ink);
+  text-decoration: none;
+}
+.story-title a:hover { color: var(--google-blue); text-decoration: underline; }
+
+.story-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--mute);
+}
+
+.meta-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.story-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-ai-action {
+  padding: 4px 10px;
+  border-radius: 14px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: opacity .15s, transform .15s;
+}
+
+.btn-sum {
+  background: var(--ai-bg);
+  color: var(--ai-purple);
+  border-color: color-mix(in srgb, var(--ai-purple) 30%, transparent);
+}
+.btn-exp {
+  background: var(--eli15-bg);
+  color: var(--eli15-green);
+  border-color: color-mix(in srgb, var(--eli15-green) 30%, transparent);
+}
+.btn-ai-action:hover { opacity: .85; transform: translateY(-1px); }
+
+/* Accordion Drawer */
+.ai-drawer {
+  display: none;
+  margin-top: 12px;
+  padding: 14px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.ai-drawer.summarize-mode {
+  background: var(--ai-bg);
+  border: 1px solid color-mix(in srgb, var(--ai-purple) 30%, transparent);
+  color: var(--ink);
+}
+
+.ai-drawer.explain-mode {
+  background: var(--eli15-bg);
+  border: 1px solid color-mix(in srgb, var(--eli15-green) 30%, transparent);
+  color: var(--ink);
+}
+
+.drawer-label {
+  font-weight: 700;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .6px;
+  margin-bottom: 6px;
+}
+.ai-drawer.summarize-mode .drawer-label { color: var(--ai-purple); }
+.ai-drawer.explain-mode .drawer-label { color: var(--eli15-green); }
+
+.ai-drawer ul { margin: 6px 0 0 18px; padding: 0; }
+
+/* ── Right Sidebar (Notifications & Bot Activity) ───────────── */
+.right-sidebar {
+  position: sticky;
+  top: 84px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.sidebar-header {
+  padding: 14px 16px;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sidebar-header-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .8px;
+  color: var(--mute);
+}
+
+.activity-feed {
+  max-height: calc(100vh - 160px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.activity-empty {
+  padding: 32px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--mute);
+}
+
+.activity-item {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-sub);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.activity-item:last-child { border-bottom: none; }
+
+.activity-flow {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--google-blue);
+}
+
+.activity-reply {
+  font-size: 12px;
+  color: var(--ink2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 80px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+}
+
+.activity-time {
+  font-size: 10px;
+  color: var(--mute);
+}
+
+/* Empty State */
+.empty-feed {
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--mute);
+}
+
+/* ── Responsive Breakdown for Mobile/Desktop ─────────────────── */
+@media (max-width: 960px) {
+  .layout-container {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .left-sidebar, .right-sidebar {
+    position: static;
+  }
+  .activity-feed {
+    max-height: 300px;
+  }
+}
+</style>
+</head>
+<body>
+
+  <!-- Top Google Navigation Header -->
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a href="/" class="brand">
+        <div class="brand-icon">N</div>
+        <div class="brand-title">News <span>Pulse</span></div>
+      </a>
+
+      <div class="search-container">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="22" y2="22"/></svg>
+        <input id="q" type="search" placeholder="Search news topics, sources, or keywords…" aria-label="Search news" autocomplete="off">
+      </div>
+    </div>
+  </header>
+
+  <!-- Responsive Layout Grid -->
+  <div class="layout-container">
+
+    <!-- Left Column: Notification Filters -->
+    <aside class="left-sidebar">
+      <div class="sidebar-title">Smart Notifications</div>
+      <div class="filter-group">
+        <label class="filter-item"><input type="checkbox" id="chk-ai" checked> <span>AI & Machine Learning</span></label>
+        <label class="filter-item"><input type="checkbox" id="chk-sec" checked> <span>Cybersecurity</span></label>
+        <label class="filter-item"><input type="checkbox" id="chk-btc"> <span>Crypto & Bitcoin</span></label>
+        <label class="filter-item"><input type="checkbox" id="chk-oai" checked> <span>OpenAI & LLMs</span></label>
+      </div>
+    </aside>
+
+    <!-- Center Column: Main News Feed -->
+    <main class="main-content">
+      <div class="feed-header">
+        <div class="feed-title">Top Technology Stories</div>
+        <div class="feed-actions">
+          <button class="btn-batch-summarize" onclick="autoSummarizeTop5()">Auto-Summarize Top 5</button>
+          <span class="count-info" id="count"></span>
+        </div>
+      </div>
+
+      <ul id="list" role="list"></ul>
+    </main>
+
+    <!-- Right Column: Live Notifications & Bot Activity -->
+    <aside class="right-sidebar">
+      <div class="sidebar-header">
+        <span class="sidebar-header-title">Live Updates & Notifications</span>
+      </div>
+      <div class="activity-feed" id="activityFeed">
+        <div class="activity-empty" id="activityEmpty">No activity yet. Runs automatically with <code>python run.py</code></div>
+        <div id="activityEvents"></div>
+      </div>
+    </aside>
+
+  </div>
+
+<script>
+/* ── Config ─────────────────────────────────────────────────── */
+const MAX = 100;
+let items = [];
+const seen = new Set();
+const $ = id => document.getElementById(id);
+
+/* ── Helpers ─────────────────────────────────────────────────── */
+function ago(unix) {
+  const s = Math.max(0, Date.now() / 1000 - unix);
+  if (s < 60)    return 'just now';
+  if (s < 3600)  return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  return Math.floor(s / 86400) + 'd ago';
+}
+
+function host(u) {
+  try { return new URL(u).hostname.replace(/^www\./, ''); }
+  catch { return 'news.ycombinator.com'; }
+}
+
+function escHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function faviconEl(url) {
+  const domain = host(url);
+  const initial = domain.charAt(0).toUpperCase();
+  try {
+    const src = `https://www.google.com/s2/favicons?sz=32&domain=${encodeURIComponent(domain)}`;
+    return `<span class="favicon-box"><img src="${src}" alt="" loading="lazy" onerror="this.parentElement.textContent='${initial}'"></span>`;
+  } catch {
+    return `<span class="favicon-box">${initial}</span>`;
+  }
+}
+
+/* ── AI Summarize & ELI15 ────────────────────────────────────── */
+async function toggleSummarize(id, title, url) {
+  const drawer = $(`drawer-${id}`);
+  if (drawer.style.display === 'block' && drawer.classList.contains('summarize-mode')) {
+    drawer.style.display = 'none';
+    return;
+  }
+  
+  drawer.className = 'ai-drawer summarize-mode';
+  drawer.innerHTML = `<div class="drawer-label">Generating 30-Second Summary…</div>`;
+  drawer.style.display = 'block';
+
+  try {
+    const r = await fetch(`/api/summarize?title=${encodeURIComponent(title)}&url=${encodeURIComponent(url || '')}`);
+    const data = await r.json();
+    
+    let pointsHtml = (data.key_points || []).map(p => `<li>${escHtml(p)}</li>`).join('');
+    
+    drawer.innerHTML = `
+      <div class="drawer-label">30-Second Summary</div>
+      <p style="margin-bottom:6px"><strong>Overview:</strong> ${escHtml(data.title)}</p>
+      <p style="margin-bottom:6px"><strong>Why It Matters:</strong> ${escHtml(data.why_it_matters)}</p>
+      <div class="drawer-label" style="margin-top:8px">Key Points:</div>
+      <ul>${pointsHtml}</ul>`;
+  } catch (e) {
+    drawer.innerHTML = `<div style="color:var(--google-red)">Error generating summary: ${escHtml(e.message)}</div>`;
+  }
+}
+
+async function toggleExplain(id, title) {
+  const drawer = $(`drawer-${id}`);
+  if (drawer.style.display === 'block' && drawer.classList.contains('explain-mode')) {
+    drawer.style.display = 'none';
+    return;
+  }
+  
+  drawer.className = 'ai-drawer explain-mode';
+  drawer.innerHTML = `<div class="drawer-label">Generating Simple Explanation (ELI15)…</div>`;
+  drawer.style.display = 'block';
+
+  try {
+    const r = await fetch(`/api/explain?title=${encodeURIComponent(title)}`);
+    const data = await r.json();
+    
+    drawer.innerHTML = `
+      <div class="drawer-label">Explain Like I'm 15</div>
+      <p style="margin-bottom:4px"><strong>Original Headline:</strong> "${escHtml(title)}"</p>
+      <p><strong>Simple Explanation:</strong> ${escHtml(data.simple_explanation)}</p>`;
+  } catch (e) {
+    drawer.innerHTML = `<div style="color:var(--google-red)">Error generating explanation: ${escHtml(e.message)}</div>`;
+  }
+}
+
+function autoSummarizeTop5() {
+  const top5 = items.slice(0, 5);
+  top5.forEach(h => {
+    toggleSummarize(h.id, h.title, h.url);
+  });
+}
+
+/* ── Main Feed Render ────────────────────────────────────────── */
+function render(freshId) {
+  const term  = $('q').value.trim().toLowerCase();
+  const shown = items.filter(h => !term || (h.title || '').toLowerCase().includes(term));
+  const ul    = $('list');
+
+  $('count').innerHTML = shown.length
+    ? `<strong>${shown.length}</strong> of ${items.length} stories`
+    : '';
+
+  const doRender = () => {
+    ul.replaceChildren();
+
+    if (!shown.length) {
+      const li = document.createElement('li');
+      li.className = 'empty-feed';
+      li.textContent = items.length ? 'No stories match your search criteria.' : 'Loading news stories…';
+      ul.append(li);
+      return;
+    }
+
+    shown.forEach((h) => {
+      const li    = document.createElement('li');
+      li.className = 'story-card';
+
+      const link   = h.url || ('https://news.ycombinator.com/item?id=' + h.id);
+      const domain = host(h.url);
+
+      li.innerHTML = `
+        <div class="story-header">
+          <span class="story-source">${faviconEl(h.url)} ${escHtml(domain)}</span>
+          <span>•</span>
+          <span>${ago(h.time)}</span>
+        </div>
+        <div class="story-title">
+          <a href="${escHtml(link)}" target="_blank" rel="noopener noreferrer">${escHtml(h.title)}</a>
+        </div>
+        <div class="story-meta">
+          <div class="meta-info">
+            <span>By <strong>${escHtml(h.author || 'Unknown')}</strong></span>
+          </div>
+          <div class="story-actions">
+            <button class="btn-ai-action btn-sum" onclick="toggleSummarize(${h.id}, '${escHtml(h.title.replace(/'/g, "\\'"))}', '${escHtml(h.url || '')}')">Summarize</button>
+            <button class="btn-ai-action btn-exp" onclick="toggleExplain(${h.id}, '${escHtml(h.title.replace(/'/g, "\\'"))}')">Explain (ELI15)</button>
+          </div>
+        </div>
+        <div class="ai-drawer" id="drawer-${h.id}"></div>`;
+
+      ul.append(li);
+    });
+  };
+
+  if (document.startViewTransition && freshId == null) {
+    document.startViewTransition(doRender);
+  } else {
+    doRender();
+  }
+}
+
+/* ── Data Management ─────────────────────────────────────────── */
+function add(h, fresh) {
+  if (seen.has(h.id)) return;
+  seen.add(h.id); items.unshift(h);
+  items.sort((a, b) => b.time - a.time);
+  items = items.slice(0, MAX);
+  render(fresh ? h.id : null);
+}
+
+async function load() {
+  const r = await fetch('/api/headlines?limit=' + MAX);
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const data = await r.json();
+  data.slice().reverse().forEach(h => add(h, false));
+  if (!data.length) render();
+}
+
+function live() {
+  const es = new EventSource('/api/headlines/stream');
+  es.onmessage = e => add(JSON.parse(e.data), true);
+}
+
+/* ── Right Column: Bot Activity & Notifications Stream ────────── */
+let lastBotEventTs = 0;
+
+function agoMs(ts) {
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 60)    return 'just now';
+  if (s < 3600)  return Math.floor(s / 60) + 'm ago';
+  return Math.floor(s / 3600) + 'h ago';
+}
+
+async function pollBotEvents() {
+  try {
+    const r = await fetch('/api/bot-events');
+    if (!r.ok) return;
+    const events = await r.json();
+
+    const container = $('activityEvents');
+    const empty     = $('activityEmpty');
+
+    if (!events.length) {
+      container.innerHTML = '';
+      empty.style.display = '';
+      return;
+    }
+
+    empty.style.display = 'none';
+
+    const newestTs = events[0]?.ts ?? 0;
+    if (newestTs === lastBotEventTs) return;
+    lastBotEventTs = newestTs;
+
+    container.innerHTML = '';
+    for (const ev of events) {
+      const div = document.createElement('div');
+      div.className = 'activity-item';
+      div.innerHTML = `
+        <div class="activity-flow">${escHtml(ev.flow ?? 'Notification')}</div>
+        <div class="activity-reply">${escHtml(ev.reply ?? '')}</div>
+        <div class="activity-time">${agoMs(ev.ts)}</div>`;
+      container.append(div);
+    }
+  } catch (e) {
+    /* Gateway offline — ignore */
+  }
+}
+
+/* ── Boot Initialization ─────────────────────────────────────── */
+$('q').addEventListener('input', () => render());
+setInterval(() => render(), 60000);
+load().then(live).catch(e => console.error(e));
+
+setInterval(pollBotEvents, 4000);
+pollBotEvents();
+</script>
+</body>
+</html>
