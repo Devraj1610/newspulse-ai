@@ -143,19 +143,103 @@ def listen_for_live_news():
 
                         if matched_topics:
                             topic_str = ", ".join(matched_topics)
-                            msg = f"🔔 SMART NOTIFICATION [{topic_str}]\nHeadline: {title}\nLink: {url}"
+                            msg = f"SMART NOTIFICATION [{topic_str}]\nHeadline: {title}\nLink: {url}"
                             print(f"[smart-notification] Matched {topic_str}: {title}")
                             reportToGateway(f"SmartNotify:{topic_str}", msg)
                             sendBridge(None, 'RealTimeUpdates', msg)
                         else:
-                            msg = f"📰 NEW HEADLINE FETCHED:\n- {title}\nLink: {url}"
+                            msg = f"Headline: {title}\nLink: {url}"
                             print(f"[live-listener] New story detected: {title}")
-                            reportToGateway('AutoNewsPush', msg)
+                            reportToGateway('New News', msg)
                             sendBridge(None, 'RealTimeUpdates', msg)
                     except Exception as parse_err:
                         print('[live-listener] Error parsing SSE json:', parse_err)
         except Exception:
             time.sleep(5)
+
+def monitor_crypto_alerts():
+    """Poll /api/crypto every 60s and alert Cosmitude when a coin moves >3% in 24h."""
+    time.sleep(10)
+    print('[crypto-monitor] Started crypto alert monitoring (>3% 24h move)...')
+    alerted = set()
+    while True:
+        try:
+            r = requests.get(GATEWAY + '/api/crypto', timeout=10)
+            if r.status_code == 200:
+                coins = r.json()
+                for coin in coins:
+                    change = coin.get('change_24h', 0) or 0
+                    coin_id = coin.get('id', '')
+                    if abs(change) > 3:
+                        alert_key = f"{coin_id}:{round(change)}"
+                        if alert_key not in alerted:
+                            direction = 'UP' if change > 0 else 'DOWN'
+                            msg = (
+                                f"CRYPTO ALERT: {coin['name']} ({coin['symbol']}) "
+                                f"is {direction} {change:+.2f}% in 24h. "
+                                f"Current price: ${coin['price']:,.2f}"
+                            )
+                            print(f"[crypto-monitor] {msg}")
+                            reportToGateway('CryptoAlert', msg)
+                            sendBridge(None, 'RealTimeUpdates', msg)
+                            alerted.add(alert_key)
+                # clean up old alerts every 100 iterations
+                if len(alerted) > 100:
+                    alerted.clear()
+        except Exception as e:
+            print('[crypto-monitor] error:', e)
+        time.sleep(60)
+
+# ── Bot 2 operations (GitHub trending / VSCode release) ───────────────────────
+def openApi2_github(bridgeData):
+    """Fetch GitHub trending repositories and send to Cosmitude."""
+    try:
+        url = 'https://api.github.com/search/repositories?q=stars:>1000&sort=stars&order=desc&per_page=5'
+        response = requests.get(url, timeout=15, headers={'Accept': 'application/vnd.github.v3+json'})
+        if response.status_code == 200:
+            data = response.json()
+            repos = data.get('items', [])
+            repo_lines = [f"{i+1}. {r['full_name']} ({r['stargazers_count']} stars): {r['description'] or 'No description'}" for i, r in enumerate(repos[:5])]
+            result = "GitHub Trending Repos:\n" + "\n".join(repo_lines)
+            reportToGateway('GithubTrending', result)
+            sendBridge(bridgeData, 'RealTimeUpdates', result)
+            return result
+    except Exception as e:
+        print('[openApi2_github error]:', e)
+    return 'GitHub trending data unavailable.'
+
+def openApi2_vscode(bridgeData):
+    """Fetch VSCode latest release info."""
+    try:
+        url = 'https://api.github.com/repos/microsoft/vscode/releases/latest'
+        response = requests.get(url, timeout=15, headers={'Accept': 'application/vnd.github.v3+json'})
+        if response.status_code == 200:
+            data = response.json()
+            result = f"VSCode Latest Release: {data.get('tag_name','N/A')} - {data.get('name','')}"
+            reportToGateway('VSCodeRelease', result)
+            sendBridge(bridgeData, 'RealTimeUpdates', result)
+            return result
+    except Exception as e:
+        print('[openApi2_vscode error]:', e)
+    return 'VSCode release data unavailable.'
+
+# ── Bot 3 operations (Hacker News by date) ───────────────────────────────────
+def openApi2_hn_bydate(bridgeData):
+    """Fetch Hacker News stories by date and send to Cosmitude."""
+    try:
+        today = datetime.utcnow().strftime('%Y-%m-%d')
+        url = f'https://hn.algolia.com/api/v1/search_by_date?tags=story&query=&numericFilters=created_at_i>{int(time.time())-86400}&hitsPerPage=5'
+        response = requests.get(url, timeout=15)
+        if response.status_code == 200:
+            hits = response.json().get('hits', [])
+            titles = [h.get('title','') for h in hits[:5] if h.get('title')]
+            result = f"HN Stories (Last 24h):\n" + "\n".join(f"- {t}" for t in titles)
+            reportToGateway('HNByDate', result)
+            sendBridge(bridgeData, 'RealTimeUpdates', result)
+            return result
+    except Exception as e:
+        print('[openApi2_hn_bydate error]:', e)
+    return 'HN by-date data unavailable.'
 
 # ---- Flow handlers ----
 
@@ -174,16 +258,22 @@ def handle_NewsAPIs():
         return 'News service error: ' + str(e)
 
 def handle_BackendSetup():
-    return 'Backend setup: news_backend.py (port 8000), gateway.py (port 8080).'
+    return 'Backend setup: news_backend.py (port 8000), gateway.py (port 8080), crypto_backend.py (poller).'
 
 def handle_DatabaseSelection():
-    return 'Database: SQLite (news.db).'
+    return 'Database: SQLite (news.db) — tables: headlines, crypto_prices.'
 
 def handle_DatabaseSchema():
-    return 'Schema: headlines (id PRIMARY KEY, title, url, time, score, author).'
+    return 'Schema: headlines (id, title, url, time, score, author), crypto_prices (coin_id, symbol, name, price, change_1h, change_24h, change_7d, market_cap, volume, ts).'
 
 def handle_RealTimeUpdates():
     return 'Real-Time Updates active via SSE stream.'
+
+def handle_GithubTrending():
+    return openApi2_github(None)
+
+def handle_HNByDate():
+    return openApi2_hn_bydate(None)
 
 FLOW_HANDLERS = {
     'NewsAPIs':          handle_NewsAPIs,
@@ -191,12 +281,15 @@ FLOW_HANDLERS = {
     'DatabaseSelection': handle_DatabaseSelection,
     'DatabaseSchema':    handle_DatabaseSchema,
     'RealTimeUpdates':   handle_RealTimeUpdates,
+    'GithubTrending':    handle_GithubTrending,
+    'HNByDate':          handle_HNByDate,
 }
 
 def go():
     try:
         login()
         threading.Thread(target=listen_for_live_news, daemon=True).start()
+        threading.Thread(target=monitor_crypto_alerts, daemon=True).start()
         
         while True:
             clienntSync()
@@ -296,6 +389,18 @@ def clienntSync():
                         t1 = Thread(target=lambda q, arg1: q.put(openApi1(arg1)), args=(que1, bridgeData))
                         t1.start()
                         t1.join()
+                    elif 'GithubTrending' in flowName:
+                        que1 = Queue.Queue()
+                        t1 = Thread(target=lambda q, arg1: q.put(openApi2_github(arg1)), args=(que1, bridgeData))
+                        t1.start()
+                    elif 'VSCodeRelease' in flowName:
+                        que1 = Queue.Queue()
+                        t1 = Thread(target=lambda q, arg1: q.put(openApi2_vscode(arg1)), args=(que1, bridgeData))
+                        t1.start()
+                    elif 'HNByDate' in flowName:
+                        que1 = Queue.Queue()
+                        t1 = Thread(target=lambda q, arg1: q.put(openApi2_hn_bydate(arg1)), args=(que1, bridgeData))
+                        t1.start()
                     else:
                         handler = get_handler_for_flow(flowName)
                         replyText = handler() if handler else f"Processed operation for {flowName}"
