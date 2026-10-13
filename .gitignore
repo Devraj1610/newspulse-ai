@@ -1,11 +1,24 @@
+# Python bytecode & cache files
 __pycache__/
+*.py[cod]
+*$py.class
+
+# Local SQLite Database files (generated at runtime)
 news.db
-.env
 *.db
 *.sqlite
-*.pyc
+*.sqlite3
+
+# Generated runtime cache & template JSON files
 NewsSystemTemplate_*.txt
 *.log
+
+# Environment & Secret files
+.env
+.env.*
+*.env
+
+# IDE & OS generated files
 .vscode/
 .idea/
 .DS_Store
