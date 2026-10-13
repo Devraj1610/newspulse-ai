@@ -1,5 +1,8 @@
 """Start the whole project:  python run.py            (news service + gateway + dashboard + Cosmitude bot)
-                              python run.py --no-bot   (without the Cosmitude bot)"""
+                              python run.py --no-bot   (without the Cosmitude bot)
+
+Note: crypto_backend.py is a library imported by gateway.py — it runs in-process, not as a separate script.
+"""
 import subprocess, sys, time
 
 parts = [["news_backend.py"], ["gateway.py"]]
