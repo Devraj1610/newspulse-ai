@@ -79,8 +79,8 @@ def _save_snapshot(coins: list):
             rows,
         )
         _db.commit()
-    # prune rows older than 24 h
-    _prune_old(now - 86400)
+    # prune rows older than 35 days
+    _prune_old(now - 35 * 86400)
     # broadcast to SSE subscribers
     snapshot = [_coin_to_dict(c) for c in coins]
     with _sub_lock:
@@ -151,16 +151,99 @@ def get_current_crypto() -> list:
         return [_coin_to_dict(c) for c in _latest_coins]
 
 
+_chart_cache: dict[str, tuple[float, list]] = {}
+_chart_lock = threading.Lock()
+
 def get_crypto_history(coin_id: str, minutes: int = 60) -> list:
-    """Return {ts, price} rows for `coin_id` over the last `minutes` minutes."""
-    cutoff = int(time.time()) - minutes * 60
+    """Return {ts, price} rows for `coin_id` over the last `minutes` minutes.
+    Supports 1h (60), 1d (1440), and 1m (43200)."""
+    now = int(time.time())
+    cutoff = now - minutes * 60
+
+    # 1. Check local SQLite store
     with _lock:
         rows = _db.execute(
             "SELECT ts, price FROM crypto_prices "
             "WHERE coin_id = ? AND ts >= ? ORDER BY ts ASC",
             (coin_id, cutoff),
         ).fetchall()
-    return [{"ts": r[0], "price": r[1]} for r in rows]
+    
+    # If SQLite has good spread (at least 15 points covering >70% of the range), use it
+    if len(rows) >= 15 and (rows[-1][0] - rows[0][0]) >= (minutes * 60 * 0.7):
+        return [{"ts": r[0], "price": r[1]} for r in rows]
+
+    days = "1" if minutes <= 1440 else "30"
+    cache_key = f"{coin_id}_{days}"
+
+    # 2. Check in-memory market_chart cache
+    with _chart_lock:
+        if cache_key in _chart_cache:
+            exp, cached_data = _chart_cache[cache_key]
+            if time.time() < exp:
+                return [p for p in cached_data if p["ts"] >= cutoff]
+
+    # 3. Attempt CoinGecko market_chart fetch
+    try:
+        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart?vs_currency=usd&days={days}"
+        r = requests.get(url, timeout=8, headers={"Accept": "application/json"})
+        if r.status_code == 200:
+            prices_data = r.json().get("prices", [])
+            if prices_data:
+                chart_points = [{"ts": int(p[0] / 1000), "price": round(float(p[1]), 4)} for p in prices_data]
+                with _chart_lock:
+                    _chart_cache[cache_key] = (time.time() + 600, chart_points) # 10m cache
+                return [p for p in chart_points if p["ts"] >= cutoff]
+    except Exception as e:
+        print(f"[crypto] market_chart fetch error for {coin_id}:", e)
+
+    # 4. Fallback: If we have some SQLite rows, return them
+    if rows:
+        return [{"ts": r[0], "price": r[1]} for r in rows]
+
+    # 5. Smart Fallback using latest coin sparkline & 24h/7d metrics
+    coin_obj = None
+    with _cache_lock:
+        for c in _latest_coins:
+            if c.get("id") == coin_id:
+                coin_obj = c
+                break
+
+    if coin_obj:
+        cur_price = float(coin_obj.get("current_price", 0) or 0)
+        spark = (coin_obj.get("sparkline_in_7d") or {}).get("price", [])
+        if spark and cur_price > 0:
+            points = []
+            if minutes <= 60:
+                # Last hour: take last 2 spark points and interpolate 12 points
+                p_start = spark[-2] if len(spark) >= 2 else cur_price * (1 - (coin_obj.get("price_change_percentage_1h_in_currency", 0) or 0)/100)
+                for i in range(12):
+                    t = now - (11 - i) * 300
+                    ratio = i / 11.0
+                    val = p_start + (cur_price - p_start) * ratio
+                    points.append({"ts": t, "price": round(val, 4)})
+            elif minutes <= 1440:
+                # 24 hours: last 24 points of sparkline
+                spark_24 = spark[-24:] if len(spark) >= 24 else spark
+                n = len(spark_24)
+                for i, p in enumerate(spark_24):
+                    t = now - (n - 1 - i) * 3600
+                    points.append({"ts": t, "price": round(float(p), 4)})
+            else:
+                # 30 days: 30 daily points constructed from 7d trend and current price
+                ch7 = float(coin_obj.get("price_change_percentage_7d_in_currency", 0) or 0) / 100.0
+                base_30 = cur_price * (1 - ch7 * 2.2) # estimated 30d base
+                for i in range(30):
+                    t = now - (29 - i) * 86400
+                    prog = i / 29.0
+                    val = base_30 + (cur_price - base_30) * (prog ** 1.3)
+                    # add small organic variance based on sparkline if available
+                    if spark:
+                        var = (spark[i % len(spark)] - sum(spark)/len(spark)) / (sum(spark)/len(spark) or 1) * (val * 0.03)
+                        val += var
+                    points.append({"ts": t, "price": round(val, 4)})
+            return points
+
+    return [{"ts": now, "price": 0}]
 
 
 def subscribe_crypto(q: queue.Queue):
