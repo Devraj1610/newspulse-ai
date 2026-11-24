@@ -57,9 +57,56 @@ except ImportError:
     _HAS_CRYPTO = False
     print("[gateway] crypto_backend not found — crypto endpoints disabled.")
 
-# ── In-memory stores ─────────────────────────────────────────────────────────
-_bot_events  = deque(maxlen=50)
+# ── In-memory stores (with disk persistence for notifications) ───────────────
+BOT_EVENTS_FILE = Path(__file__).parent / "bot_events.json"
+_bot_events  = deque(maxlen=100)
 _events_lock = threading.Lock()
+
+def _load_bot_events():
+    if BOT_EVENTS_FILE.exists():
+        try:
+            data = json.loads(BOT_EVENTS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                for item in reversed(data[:100]):
+                    _bot_events.appendleft(item)
+        except Exception as e:
+            print("[gateway] error loading bot_events:", e)
+
+_load_bot_events()
+
+def _save_bot_events():
+    try:
+        BOT_EVENTS_FILE.write_text(json.dumps(list(_bot_events)[:100], indent=2), encoding="utf-8")
+    except Exception as e:
+        print("[gateway] error saving bot_events:", e)
+
+def _get_valid_bot_events():
+    """Ensure news notifications only show articles that currently exist in news.db."""
+    import sqlite3
+    db_path = Path(__file__).parent / "news.db"
+    events = list(_bot_events)
+    if not db_path.exists():
+        return events
+    try:
+        conn = sqlite3.connect(db_path, timeout=5)
+        valid = []
+        for ev in events:
+            reply = ev.get("reply", "")
+            if "Headline:" in reply:
+                title_line = [line for line in reply.split("\n") if "Headline:" in line]
+                title = title_line[0].replace("Headline:", "").strip() if title_line else ""
+                if title:
+                    found = conn.execute("SELECT id FROM headlines WHERE title LIKE ?", ("%" + title[:25] + "%",)).fetchone()
+                    if found:
+                        valid.append(ev)
+                else:
+                    valid.append(ev)
+            else:
+                valid.append(ev)
+        conn.close()
+        return valid
+    except Exception:
+        return events
 
 _ai_cache: dict[str, tuple[float, object]] = {}  # hash -> (expires_at, result)
 _cache_lock = threading.Lock()
@@ -261,6 +308,13 @@ class Gateway(BaseHTTPRequestHandler):
         if u.path in ("/", "/index.html"):
             self._send(200, INDEX.read_bytes(), "text/html; charset=utf-8")
 
+        elif u.path == "/presentation.html":
+            pres_file = Path(__file__).parent / "presentation.html"
+            if pres_file.exists():
+                self._send(200, pres_file.read_bytes(), "text/html; charset=utf-8")
+            else:
+                self._send(404, {"error": "presentation not found"})
+
         elif u.path == "/api/health":
             try:
                 requests.get(f"{BACKEND}/headlines?limit=1", timeout=3).raise_for_status()
@@ -281,7 +335,7 @@ class Gateway(BaseHTTPRequestHandler):
 
         elif u.path == "/api/bot-events":
             with _events_lock:
-                self._send(200, list(_bot_events))
+                self._send(200, _get_valid_bot_events())
 
         elif u.path == "/api/summarize":
             title = q.get("title", [""])[0]
@@ -330,6 +384,7 @@ class Gateway(BaseHTTPRequestHandler):
                 event.setdefault("ts", time.time())
                 with _events_lock:
                     _bot_events.appendleft(event)
+                    _save_bot_events()
                 print(f"[bot-event] flow={event.get('flow')!r} mobile={event.get('mobile')!r}")
                 self._send(200, {"ok": True})
             except Exception as exc:
@@ -451,48 +506,70 @@ class Gateway(BaseHTTPRequestHandler):
         )
         if GEMINI_KEY:
             prompt = (
-                "You are a neutral crypto market analyst. Summarize the following live price data "
-                "in 3-4 sentences. Note which coins are gaining or losing, overall market sentiment, "
-                "and any notable moves. Add a disclaimer that this is not financial advice.\n\n"
-                f"Data:\n{coin_lines}\n\nReturn plain text only."
+                "You are a professional cryptocurrency market analyst. "
+                "Provide a detailed daily market behavior breakdown that explicitly explains the behavior of EVERY cryptocurrency in the list below for today.\n\n"
+                f"Tracked Cryptocurrencies Today:\n{coin_lines}\n\n"
+                "Requirements:\n"
+                "1. Mention EVERY cryptocurrency from the list by name and symbol.\n"
+                "2. For each coin, write a clear, dedicated bullet point or sentence explaining its exact behavior today (trend, strength, gain or drop, volatility).\n"
+                "3. Conclude with an overall market sentiment takeaway.\n"
+                "4. End with a non-financial advice disclaimer.\n"
+                "Return clean, readable text."
             )
             text = _gemini_call(prompt)
             if text:
                 return {"summary": text.strip(), "ai_mode": True}
-        # fallback
-        gainers = [c for c in coins if c.get("change_24h", 0) > 0]
-        losers  = [c for c in coins if c.get("change_24h", 0) < 0]
-        summary = (
-            f"Market snapshot: {len(gainers)} coins up, {len(losers)} coins down in the last 24h. "
-            f"Not financial advice."
-        )
-        return {"summary": summary, "ai_mode": False, "ai_offline": not bool(GEMINI_KEY)}
+        # Detailed fallback explaining every coin
+        lines = ["Today's Cryptocurrency Market Behavior:"]
+        for c in coins[:10]:
+            pct = c.get("change_24h", 0) or 0
+            if pct > 3:
+                desc = "surging strongly with aggressive buy-side momentum"
+            elif pct > 0:
+                desc = "holding moderate upward gains in stable trading"
+            elif pct > -3:
+                desc = "experiencing minor profit-taking and consolidation"
+            else:
+                desc = "facing steep sell-off pressure and downside volatility"
+            lines.append(f"• {c['name']} ({c['symbol']}): ${c['price']:,.2f} ({pct:+.2f}% 24h) — {desc}.")
+        lines.append("\nNot financial advice.")
+        return {"summary": "\n".join(lines), "ai_mode": False, "ai_offline": not bool(GEMINI_KEY)}
 
     def _do_crypto_eli15(self, coins: list):
         if not coins:
             coins = _crypto.get_current_crypto() if _HAS_CRYPTO else []
         if not coins:
             return {"error": "no crypto data available"}
-        top = coins[0] if coins else {}
+        coin_lines = "\n".join(
+            f"- {c['name']} ({c['symbol']}): ${c['price']:,.2f}, 24h {c['change_24h']:+.2f}%"
+            for c in coins[:10]
+        )
         if GEMINI_KEY:
             prompt = (
-                f"Explain cryptocurrency and today's market to a curious 15-year-old. "
-                f"The top coin right now is {top.get('name','Bitcoin')} at ${top.get('price',0):,.0f} "
-                f"(24h: {top.get('change_24h',0):+.2f}%). "
-                "Use a simple analogy, 2-3 sentences. This is not financial advice."
+                "Explain the behavior of EVERY cryptocurrency in this list to a curious 15-year-old using simple, fun terms and clear everyday analogies.\n\n"
+                f"Coins Today:\n{coin_lines}\n\n"
+                "Instructions:\n"
+                "1. Go through EVERY single coin listed above by name.\n"
+                "2. For each coin, give a fun 1-2 sentence explanation of what it is and how it behaved today (whether it climbed like a rocket, stayed steady like a rock, or dipped down, and why in simple words).\n"
+                "3. Keep the language simple, engaging, and friendly.\n"
+                "4. Conclude with: 'Remember, crypto moves fast — this is not financial advice!'"
             )
             text = _gemini_call(prompt)
             if text:
                 return {"explanation": text.strip(), "ai_mode": True}
-        return {
-            "explanation": (
-                f"Cryptocurrency is like digital money that lives on the internet. "
-                f"Right now, {top.get('name','Bitcoin')} is worth ${top.get('price',0):,.0f}. "
-                "Prices go up and down a lot — this is not financial advice."
-            ),
-            "ai_mode": False,
-            "ai_offline": not bool(GEMINI_KEY),
-        }
+        # Detailed fallback explaining every coin
+        lines = ["Today's Crypto Market Explained for 15-Year-Olds:"]
+        for c in coins[:10]:
+            pct = c.get("change_24h", 0) or 0
+            if pct > 2:
+                vibe = "People were super excited buying it up today, like a sneaker drop!"
+            elif pct >= 0:
+                vibe = "Cruising smoothly along, staying pretty calm and steady today."
+            else:
+                vibe = "Taking a little breather and dipping down like a roller coaster."
+            lines.append(f"• {c['name']} ({c['symbol']}): Worth ${c['price']:,.2f} ({pct:+.2f}% today) — {vibe}")
+        lines.append("\nRemember, crypto moves fast — this is not financial advice!")
+        return {"explanation": "\n".join(lines), "ai_mode": False, "ai_offline": not bool(GEMINI_KEY)}
 
     def _do_ask(self, question: str, history: list):
         if not question:
@@ -519,7 +596,7 @@ class Gateway(BaseHTTPRequestHandler):
                 coins = _crypto.get_current_crypto()
                 crypto_ctx = "\nLive crypto prices:\n" + "\n".join(
                     f"- {c['name']}: ${c['price']:,.2f} (24h {c['change_24h']:+.2f}%)"
-                    for c in coins[:5]
+                    for c in coins[:10]
                 )
             except Exception:
                 pass
@@ -532,12 +609,15 @@ class Gateway(BaseHTTPRequestHandler):
             )
 
         prompt = (
-            "You are News Pulse AI — a helpful assistant for tech news and crypto. "
-            "Answer the user's question using the provided context. "
-            "If you don't know something, say so. Never give financial advice. "
-            "Always add a brief disclaimer when discussing crypto prices.\n\n"
-            f"{news_ctx}\n{crypto_ctx}\n{history_ctx}\n\nUser question: {question}\n"
-            "Answer concisely in 2-4 sentences."
+            "You are News Pulse AI — an expert, comprehensive technology and cryptocurrency assistant. "
+            "You can answer ANY technology-related question (including consumer tech like Samsung TVs, smartphones, computing, hardware like NVIDIA GPUs/chips, software, AI models, developer tools, robotics, and crypto markets).\n\n"
+            f"{news_ctx}\n{crypto_ctx}\n{history_ctx}\n\n"
+            "Guidelines:\n"
+            "1. If the user's question relates to the live news headlines or crypto prices provided above, incorporate that live information directly into your answer.\n"
+            "2. If the user asks about general tech, hardware, consumer electronics, or companies (such as Samsung TVs, NVIDIA tech, Apple, GPUs, programming, etc.) that are NOT in the 10 headlines above, DO NOT say you lack context or cannot find news stories. Instead, DRAW UPON YOUR VAST TECHNOLOGY KNOWLEDGE to deliver a thorough, accurate, and helpful answer!\n"
+            "3. Answer in 2-5 concise, well-structured sentences or clear bullet points.\n"
+            "4. Never give financial advice. Add a brief disclaimer only when discussing crypto price speculation.\n\n"
+            f"User question: {question}"
         )
         text = _gemini_call(prompt)
         if text:
@@ -547,7 +627,7 @@ class Gateway(BaseHTTPRequestHandler):
     # ── SSE streams ───────────────────────────────────────────────────────────
     def _stream_news(self):
         try:
-            r = requests.get(f"{BACKEND}/headlines/stream", stream=True, timeout=(5, 60))
+            r = requests.get(f"{BACKEND}/headlines/stream", stream=True, timeout=(5, None))
         except Exception:
             return self._send(502, {"error": "news service unreachable"})
         self.send_response(200)
@@ -555,9 +635,10 @@ class Gateway(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         try:
-            for line in r.iter_lines(chunk_size=1):
-                self.wfile.write(line + b"\n")
-                self.wfile.flush()
+            for chunk in r.iter_content(chunk_size=None):
+                if chunk:
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
         except Exception:
             pass
         finally:
