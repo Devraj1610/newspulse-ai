@@ -22,7 +22,7 @@ Staying up-to-date across tech news and crypto markets means juggling tabs, miss
 
 | Phase | What happens |
 |-------|--------------|
-| **News** | Polls Algolia HN every 30s — single request, full front-page details stored in SQLite |
+| **News** | Polls Algolia HN + Publisher RSS (TechCrunch, The Verge, Ars Technica) every 30s — stored in SQLite |
 | **Crypto** | Polls CoinGecko every ~30s for top 10 coins with 1h/24h/7d change and sparklines |
 | **AI** | Calls Gemini REST API server-side to summarize stories, explain in plain English, and answer free-form questions |
 | **Bot** | Cosmitude bridge bot evaluates smart keyword filters (AI, Security, Bitcoin, OpenAI) and crypto alerts (>3% move) and pushes notifications to the Cosmitude cloud |
