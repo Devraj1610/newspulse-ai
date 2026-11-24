@@ -502,7 +502,8 @@ body {
 .story-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
   font-size: 12px;
   color: var(--mute);
   margin-bottom: 6px;
@@ -517,6 +518,22 @@ body {
   align-items: center;
   gap: 6px;
 }
+
+.source-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  line-height: 1.6;
+}
+.src-hn    { background: #ff6600; color: #fff; }
+.src-tc    { background: #0A8F08; color: #fff; }
+.src-verge { background: #e83c3c; color: #fff; }
+.src-ars   { background: #e05c00; color: #fff; }
+.src-rss   { background: #6c757d; color: #fff; }
 
 .favicon-box {
   width: 14px; height: 14px;
@@ -1157,10 +1174,20 @@ body {
 }
 
 .activity-feed {
-  max-height: calc(100vh - 200px);
+  max-height: 370px;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.activity-feed::-webkit-scrollbar {
+  width: 5px;
+}
+.activity-feed::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
 }
 
 .activity-empty {
@@ -1303,7 +1330,9 @@ body {
             <p class="dropdown-desc">Keyword filters trigger automatic alerts in the Live Updates feed.</p>
             <div class="filter-group">
               <label class="filter-item"><input type="checkbox" id="chk-ai" checked> <span>AI &amp; Machine Learning</span></label>
-              <label class="filter-item"><input type="checkbox" id="chk-sec" checked> <span>Cybersecurity</span></label>
+              <label class="filter-item"><input type="checkbox" id="chk-startups" checked> <span>Startups</span></label>
+              <label class="filter-item"><input type="checkbox" id="chk-venture" checked> <span>Venture &amp; Funding</span></label>
+              <label class="filter-item"><input type="checkbox" id="chk-sec" checked> <span>Security</span></label>
               <label class="filter-item"><input type="checkbox" id="chk-btc"> <span>Crypto &amp; Bitcoin</span></label>
               <label class="filter-item"><input type="checkbox" id="chk-oai" checked> <span>OpenAI &amp; LLMs</span></label>
             </div>
@@ -1377,11 +1406,10 @@ body {
         <div class="crypto-layout-grid">
 
           <!-- Left Column: Explanation of Summarize Market & ELI15 Section -->
+          <!-- Left Column: Market Analysis & ELI15 Section -->
           <aside class="crypto-ai-sidebar">
             <div class="crypto-sidebar-header">
-              <div class="crypto-sidebar-title">
-                <span>🤖</span> Market Analysis &amp; ELI15
-              </div>
+              <div class="crypto-sidebar-title">Market Analysis &amp; ELI15</div>
             </div>
 
             <div class="crypto-sidebar-actions">
@@ -1390,9 +1418,9 @@ body {
             </div>
 
             <!-- Output box on the left -->
-            <div id="cryptoAiBox" class="crypto-ai-box">
+            <div id="cryptoAiBox" class="crypto-ai-box" style="display:none">
               <div class="drawer-label" id="cryptoAiLabel">AI Market Overview</div>
-              <div id="cryptoAiText">Click <strong>Summarize Market</strong> or <strong>Explain Like I'm 15</strong> above to generate real-time AI market analysis using live prices and Gemini.</div>
+              <div id="cryptoAiText"></div>
             </div>
           </aside>
 
@@ -1417,8 +1445,8 @@ body {
                 </div>
                 <div class="time-btns">
                   <button class="time-btn active" onclick="setTimeRange(60,this)">1h</button>
-                  <button class="time-btn" onclick="setTimeRange(360,this)">6h</button>
-                  <button class="time-btn" onclick="setTimeRange(1440,this)">24h</button>
+                  <button class="time-btn" onclick="setTimeRange(1440,this)">1d</button>
+                  <button class="time-btn" onclick="setTimeRange(43200,this)">1m</button>
                 </div>
               </div>
               <div class="chart-canvas-wrap">
@@ -1477,7 +1505,7 @@ body {
       <!-- Separate Section / Tabs for Smart Notifications vs All -->
       <div class="sidebar-tabs">
         <button class="sidebar-tab-btn active" id="btnSideAll" onclick="setSidebarFilter('all')">All Updates</button>
-        <button class="sidebar-tab-btn" id="btnSideSmart" onclick="setSidebarFilter('smart')">🔔 Smart Notifications</button>
+        <button class="sidebar-tab-btn" id="btnSideSmart" onclick="setSidebarFilter('smart')">Smart Notifications</button>
       </div>
 
       <div class="activity-feed" id="activityFeed">
@@ -1492,7 +1520,8 @@ body {
 /* ── Config ─────────────────────────────────────────────────── */
 const MAX = 100;
 let items = [];
-const seen = new Set();
+const seen    = new Set();   // dedup by id
+const seenUrl = new Set();   // dedup by url (second safety net)
 const $ = id => document.getElementById(id);
 
 /* ── Smart Menu Dragdown Toggle ──────────────────────────────── */
@@ -1663,9 +1692,23 @@ function render(freshId) {
       const link   = h.url || ('https://news.ycombinator.com/item?id=' + h.id);
       const domain = host(h.url);
 
+      let sourceName = h.source;
+      if (!sourceName) {
+        if (domain.includes('techcrunch.com')) sourceName = 'TechCrunch';
+        else if (domain.includes('theverge.com')) sourceName = 'The Verge';
+        else if (domain.includes('arstechnica.com')) sourceName = 'Ars Technica';
+        else sourceName = 'HN';
+      }
+      const srcLabel  = escHtml(sourceName);
+      const srcCls    = sourceName === 'HN' ? 'src-hn'
+                      : sourceName.startsWith('TechCrunch') ? 'src-tc'
+                      : sourceName === 'The Verge'    ? 'src-verge'
+                      : sourceName === 'Ars Technica' ? 'src-ars'
+                      : 'src-rss';
       li.innerHTML = `
         <div class="story-header">
           <span class="story-source">${faviconEl(h.url)} ${escHtml(domain)}</span>
+          <span class="source-badge ${srcCls}">${srcLabel}</span>
           <span>•</span>
           <span>${ago(h.time)}</span>
         </div>
@@ -1696,24 +1739,63 @@ function render(freshId) {
 
 /* ── Data Management ─────────────────────────────────────────── */
 function add(h, fresh) {
-  if (seen.has(h.id)) return;
-  seen.add(h.id); items.unshift(h);
+  if (!h || !h.id) return false;
+  if (seen.has(h.id)) return false;
+  if (h.url && seenUrl.has(h.url)) return false;   // second guard: same URL, different id
+
+  seen.add(h.id);
+  if (h.url) seenUrl.add(h.url);
+
+  items.unshift(h);
   items.sort((a, b) => b.time - a.time);
-  items = items.slice(0, MAX);
+
+  // Whenever a new story is added, push out / remove the 100th+ story
+  while (items.length > MAX) {
+    const removed = items.pop();
+    if (removed) {
+      seen.delete(removed.id);
+      if (removed.url) seenUrl.delete(removed.url);
+    }
+  }
+
   render(fresh ? h.id : null);
+  if (fresh) renderBotEvents();
+  return true;
 }
 
 async function load() {
-  const r = await fetch('/api/headlines?limit=' + MAX);
-  if (!r.ok) throw new Error('HTTP ' + r.status);
-  const data = await r.json();
-  data.slice().reverse().forEach(h => add(h, false));
-  if (!data.length) render();
+  try {
+    const r = await fetch('/api/headlines?limit=' + MAX);
+    if (!r.ok) return;
+    const data = await r.json();
+    if (!Array.isArray(data)) return;
+    let anyAdded = false;
+    data.slice().reverse().forEach(h => {
+      if (add(h, false)) anyAdded = true;
+    });
+    if (!items.length) render();
+    renderBotEvents();
+  } catch (e) {
+    console.error('load error:', e);
+  }
 }
 
+let newsSSE = null;
 function live() {
-  const es = new EventSource('/api/headlines/stream');
-  es.onmessage = e => add(JSON.parse(e.data), true);
+  if (newsSSE) {
+    try { newsSSE.close(); } catch (e) {}
+  }
+  newsSSE = new EventSource('/api/headlines/stream');
+  newsSSE.onmessage = e => {
+    try {
+      const h = JSON.parse(e.data);
+      if (h && h.id) add(h, true);
+    } catch (err) {}
+  };
+  newsSSE.onerror = () => {
+    try { newsSSE.close(); } catch (e) {}
+    setTimeout(live, 5000); // auto-reconnect after 5s if disconnected
+  };
 }
 
 /* ── CRYPTO: State ───────────────────────────────────────────── */
@@ -1822,6 +1904,9 @@ function drawChart(history, coinId) {
 
   const labels = history.map(p => {
     const d = new Date(p.ts * 1000);
+    if (currentTimeRange > 1440) {
+      return d.toLocaleDateString([], {month: 'short', day: 'numeric'});
+    }
     return d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
   });
   const prices = history.map(p => p.price);
@@ -2065,8 +2150,115 @@ $('askInput').addEventListener('input', () => {
 });
 
 /* ── Right Column: Bot Activity & Notifications Stream ────────── */
+const NOTIF_STORAGE_KEY = 'news_pulse_notifications_v2';
+const DOMAIN_STORAGE_KEY = 'news_pulse_smart_domains_v2';
 let lastBotEventTs = 0;
 let cachedBotEvents = [];
+try {
+  const saved = localStorage.getItem(NOTIF_STORAGE_KEY);
+  if (saved) {
+    const parsed = JSON.parse(saved);
+    if (Array.isArray(parsed)) cachedBotEvents = parsed.slice(0, 50);
+  }
+} catch {}
+
+const DOMAIN_KEYWORDS = {
+  ai: [
+    'ai', 'llm', 'machine learning', 'deep learning', 'neural', 'model', 'models',
+    'claude', 'gemini', 'deepmind', 'anthropic', 'agent', 'agents', 'artificial intelligence',
+    'pytorch', 'tensorflow', 'transformer', 'transformers', 'diffusion', 'vision'
+  ],
+  startups: [
+    'startup', 'startups', 'founder', 'founders', 'co-founder', 'incubator', 'accelerator',
+    'y combinator', 'yc', 'bootstrapped', 'mvp', 'seed stage', 'stealth', 'early-stage',
+    'unicorn', 'pitch deck', 'launching', 'launches'
+  ],
+  venture: [
+    'venture', 'venture capital', 'vc', 'vcs', 'funding', 'raises', 'raised', 'fundraise',
+    'valuation', 'series a', 'series b', 'series c', 'seed round', 'investor', 'investors',
+    'investment', 'invests', 'sequoia', 'andreessen', 'a16z', 'capital', 'angel round',
+    'ipo', 'acquisition', 'acquires', 'bought', 'merger'
+  ],
+  sec: [
+    'security', 'vulnerability', 'vulnerabilities', 'cve', 'hacker', 'hackers', 'hacking',
+    'hacked', 'breach', 'breaches', 'exploit', 'exploits', 'quantum', 'auth', 'authentication',
+    'cipher', 'ssh', 'encryption', 'malware', 'ransomware', 'patch', 'zero-day', 'firewall',
+    'bioterrorism', 'enclave', 'infosec', 'cyber', 'backdoor', 'phishing'
+  ],
+  btc: [
+    'bitcoin', 'btc', 'crypto', 'blockchain', 'ethereum', 'eth', 'solana', 'sol',
+    'zcash', 'zec', 'xrp', 'coin', 'coins', 'token', 'tokens', 'defi', 'web3',
+    'wallet', 'mining', 'cryptocurrency'
+  ],
+  oai: [
+    'openai', 'altman', 'sam altman', 'chatgpt', 'gpt-4', 'gpt-5', 'gpt', 'o1', 'o3',
+    'sora', 'dall-e', 'llm', 'llms'
+  ]
+};
+
+function getSelectedDomains() {
+  return {
+    ai:       $('chk-ai') ? $('chk-ai').checked : true,
+    startups: $('chk-startups') ? $('chk-startups').checked : true,
+    venture:  $('chk-venture') ? $('chk-venture').checked : true,
+    sec:      $('chk-sec') ? $('chk-sec').checked : true,
+    btc:      $('chk-btc') ? $('chk-btc').checked : false,
+    oai:      $('chk-oai') ? $('chk-oai').checked : true,
+  };
+}
+
+function saveSelectedDomains() {
+  try {
+    localStorage.setItem(DOMAIN_STORAGE_KEY, JSON.stringify(getSelectedDomains()));
+  } catch(e) {}
+}
+
+function loadSelectedDomains() {
+  try {
+    const raw = localStorage.getItem(DOMAIN_STORAGE_KEY);
+    if (raw) {
+      const d = JSON.parse(raw);
+      if ($('chk-ai')       && typeof d.ai       === 'boolean') $('chk-ai').checked       = d.ai;
+      if ($('chk-startups') && typeof d.startups === 'boolean') $('chk-startups').checked = d.startups;
+      if ($('chk-venture')  && typeof d.venture  === 'boolean') $('chk-venture').checked  = d.venture;
+      if ($('chk-sec')      && typeof d.sec      === 'boolean') $('chk-sec').checked      = d.sec;
+      if ($('chk-btc')      && typeof d.btc      === 'boolean') $('chk-btc').checked      = d.btc;
+      if ($('chk-oai')      && typeof d.oai      === 'boolean') $('chk-oai').checked      = d.oai;
+    }
+  } catch(e) {}
+}
+
+function getItemDomains(item) {
+  const matched = new Set();
+  const flow = String(item.flow || '').toLowerCase();
+  const text = String(item.text || '').toLowerCase();
+  const source = String(item.source || '').toLowerCase();
+  const combined = flow + ' ' + text + ' ' + source;
+
+  // Direct source / flow matching for category feeds
+  if (source.includes('startups') || flow.includes('startups')) matched.add('startups');
+  if (source.includes('venture') || flow.includes('venture')) matched.add('venture');
+  if (source.includes('security') || flow.includes('security') || flow.includes('cybersecurity')) matched.add('sec');
+  if (source.includes('techcrunch ai') || flow.includes('ai & machine learning') || flow.includes('artificial intelligence')) matched.add('ai');
+  if (item.isCrypto || flow.includes('crypto') || flow.includes('bitcoin')) matched.add('btc');
+  if (flow.includes('openai')) matched.add('oai');
+
+  // Keyword indicators
+  for (const [dom, keywords] of Object.entries(DOMAIN_KEYWORDS)) {
+    if (matched.has(dom)) continue;
+    for (const kw of keywords) {
+      if (kw.includes(' ') || kw.includes('-')) {
+        if (combined.includes(kw)) { matched.add(dom); break; }
+      } else {
+        const regex = new RegExp('\\b' + kw + '\\b', 'i');
+        if (regex.test(combined)) { matched.add(dom); break; }
+      }
+    }
+  }
+
+  return matched;
+}
+
 let sidebarFilter = 'all';  // 'all' | 'smart'
 
 function setSidebarFilter(filter) {
@@ -2091,10 +2283,10 @@ function parseBotEvent(ev) {
   if (flow === 'AutoNewsPush' || flow === 'AutoNews') {
     flow = 'New News';
   } else if (flow.startsWith('SmartNotify:')) {
-    flow = '🔔 ' + flow.replace('SmartNotify:', '');
+    flow = flow.replace('SmartNotify:', '');
     isSmart = true;
   } else if (flow === 'CryptoAlert') {
-    flow = '📈 Crypto Alert';
+    flow = 'Crypto Alert';
     isCrypto = true;
     isSmart = true;
   }
@@ -2108,6 +2300,9 @@ function parseBotEvent(ev) {
     link = linkMatch[1];
     text = text.replace(/Link:\s*https?:\/\/[^\s\n\r]+/i, '').trim();
   }
+
+  // Strip optional source prefix like [TechCrunch]
+  text = text.replace(/^\[.*?\]\s*/, '');
 
   // Replace "NEW HEADLINE FETCHED:\n- " with "Headline: "
   text = text.replace(/^NEW HEADLINE FETCHED:\s*-?\s*/i, 'Headline: ');
@@ -2123,18 +2318,87 @@ function parseBotEvent(ev) {
 function renderBotEvents() {
   const container = $('activityEvents');
   const empty     = $('activityEmpty');
+  if (!container || !empty) return;
 
-  const filtered = cachedBotEvents.filter(ev => {
-    const parsed = parseBotEvent(ev);
-    if (sidebarFilter === 'smart') return parsed.isSmart;
-    return true;
+  const selectedDomains = getSelectedDomains();
+  const hasAnyDomain = Object.values(selectedDomains).some(v => v);
+
+  // 1. Process cached bot events
+  const botItems = cachedBotEvents.map(rawEv => {
+    const parsed = parseBotEvent(rawEv);
+    parsed.domains = getItemDomains(parsed);
+    parsed.isCrypto = parsed.domains.has('btc') || parsed.isCrypto;
+    parsed.isSmart = parsed.domains.size > 0 || parsed.isSmart;
+    return parsed;
   });
+
+  // 2. Also process current top stories from `items` so domain-related news always shows
+  const storyItems = [];
+  const seenTitles = new Set(
+    botItems.map(b => (b.text || '').toLowerCase().replace(/^headline:\s*/i, '').trim().slice(0, 35))
+  );
+
+  for (const s of items) {
+    if (!s || !s.title) continue;
+    const cleanTitle = s.title.trim();
+    const titleKey = cleanTitle.toLowerCase().slice(0, 35);
+    if (seenTitles.has(titleKey)) continue;
+
+    const dummy = { flow: '', text: cleanTitle, source: s.source || '', isCrypto: false };
+    const doms = getItemDomains(dummy);
+    if (doms.size === 0) continue;
+
+    seenTitles.add(titleKey);
+
+    let flowLabel = 'Smart News';
+    if (doms.has('sec')) flowLabel = 'Cybersecurity';
+    else if (doms.has('oai')) flowLabel = 'OpenAI & LLMs';
+    else if (doms.has('ai')) flowLabel = 'AI & Machine Learning';
+    else if (doms.has('startups')) flowLabel = 'Startups';
+    else if (doms.has('venture')) flowLabel = 'Venture & Funding';
+    else if (doms.has('btc')) flowLabel = 'Crypto & Bitcoin';
+
+    storyItems.push({
+      flow: flowLabel,
+      text: 'Headline: ' + cleanTitle,
+      link: s.url || '',
+      isSmart: true,
+      isCrypto: doms.has('btc'),
+      ts: s.time || (Date.now() / 1000),
+      domains: doms
+    });
+  }
+
+  // Combine and sort by timestamp descending
+  const allCandidates = [...botItems, ...storyItems];
+  allCandidates.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+
+  let filtered = [];
+  if (sidebarFilter === 'smart') {
+    if (!hasAnyDomain) {
+      container.innerHTML = '';
+      empty.style.display = '';
+      empty.textContent = 'No domains selected. Check a topic in the Smart Notifications menu (top-left).';
+      return;
+    }
+    // Only show items that match at least one currently selected domain
+    filtered = allCandidates.filter(item => {
+      const doms = item.domains || getItemDomains(item);
+      return Array.from(doms).some(dom => selectedDomains[dom] === true);
+    });
+  } else {
+    // 'all' shows all events and updates
+    filtered = allCandidates;
+  }
+
+  // Display top 30
+  filtered = filtered.slice(0, 30);
 
   if (!filtered.length) {
     container.innerHTML = '';
     empty.style.display = '';
     empty.textContent = sidebarFilter === 'smart' 
-      ? 'No smart keyword alerts triggered yet.' 
+      ? 'No news or alerts yet for the selected domains.' 
       : 'No activity yet. Runs automatically with python run.py';
     return;
   }
@@ -2142,8 +2406,7 @@ function renderBotEvents() {
   empty.style.display = 'none';
   container.innerHTML = '';
 
-  for (const rawEv of filtered) {
-    const item = parseBotEvent(rawEv);
+  for (const item of filtered) {
     const div = document.createElement('div');
     div.className = 'activity-item' + (item.isSmart ? ' is-smart' : '') + (item.isCrypto ? ' is-crypto' : '');
 
@@ -2169,11 +2432,12 @@ async function pollBotEvents() {
     const r = await fetch('/api/bot-events');
     if (!r.ok) return;
     const events = await r.json();
+    if (!Array.isArray(events)) return;
 
-    cachedBotEvents = events;
-    const newestTs = events[0]?.ts ?? 0;
-    if (newestTs === lastBotEventTs) return;
-    lastBotEventTs = newestTs;
+    cachedBotEvents = events.slice(0, 50);
+    try {
+      localStorage.setItem(NOTIF_STORAGE_KEY, JSON.stringify(cachedBotEvents));
+    } catch {}
 
     renderBotEvents();
   } catch (e) {
@@ -2185,11 +2449,34 @@ async function pollBotEvents() {
 $('q').addEventListener('input', () => render());
 setInterval(() => render(), 60000);
 load().then(live).catch(e => console.error(e));
+setInterval(load, 15000); // Polling news every 15s to guarantee all updates sync seamlessly
 loadGithubRepos();
 setInterval(loadGithubRepos, 60000); // Automatically update newly emerging repos every 60s
 
+// Smart notifications domain checkboxes interactivity
+loadSelectedDomains();
+['chk-ai', 'chk-startups', 'chk-venture', 'chk-sec', 'chk-btc', 'chk-oai'].forEach(id => {
+  const el = $(id);
+  if (el) {
+    el.addEventListener('change', () => {
+      saveSelectedDomains();
+      renderBotEvents();
+    });
+  }
+});
+
+// Render any restored notifications immediately on page load
+renderBotEvents();
+
 setInterval(pollBotEvents, 4000);
 pollBotEvents();
+
+// Refresh crypto chart every minute
+setInterval(() => {
+  if (selectedCoinId) {
+    loadChart(selectedCoinId, currentTimeRange);
+  }
+}, 60000);
 
 checkAiStatus();
 </script>
