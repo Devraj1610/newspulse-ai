@@ -16,6 +16,7 @@ import queue as Queue
 import sys
 from sys import platform
 import os
+import re
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -24,17 +25,56 @@ username = ''
 MobileNumber = ''
 forumID = '86dbeafd-0acb-463c-8079-78da13974e74'
 
+# ── Dedup set for bridge messages: only send each story once ──────
+_bridge_sent_ids = set()
+_bridge_sent_lock = threading.Lock()
+# Stores the latest live news message for status reporting
+_last_live_news = {'title': '', 'url': '', 'source': ''}
+
 GATEWAY = os.environ.get('GATEWAY_URL', 'http://localhost:8080')
 DB_PATH = os.environ.get('DB_PATH', 'news.db')
 
 # ── Smart Notification Keywords ──────────────────────────────────
 NOTIFICATION_KEYWORDS = {
-    'AI': ['ai', 'llm', 'gpt', 'openai', 'claude', 'gemini', 'deepmind', 'machine learning', 'model', 'anthropic'],
-    'Cybersecurity': ['security', 'vulnerability', 'cve', 'hack', 'breach', 'exploit', 'quantum', 'auth', 'cipher'],
-    'Bitcoin': ['bitcoin', 'btc', 'crypto', 'blockchain', 'ethereum'],
+    'AI': ['ai', 'llm', 'gpt', 'openai', 'claude', 'gemini', 'deepmind', 'machine learning', 'model', 'anthropic', 'neural'],
+    'Startups': ['startup', 'startups', 'founder', 'founders', 'incubator', 'accelerator', 'y combinator', 'yc', 'bootstrapped', 'launch', 'stealth'],
+    'Venture': ['venture', 'funding', 'raises', 'raised', 'fundraise', 'valuation', 'series a', 'series b', 'seed round', 'investor', 'sequoia', 'a16z', 'ipo', 'acquisition', 'acquires'],
+    'Security': ['security', 'vulnerability', 'cve', 'hack', 'breach', 'exploit', 'quantum', 'auth', 'cipher', 'malware', 'ransomware', 'patch', 'zero-day'],
+    'Bitcoin': ['bitcoin', 'btc', 'crypto', 'blockchain', 'ethereum', 'solana', 'xrp'],
     'OpenAI': ['openai', 'altman', 'chatgpt', 'o1', 'o3', 'sora']
 }
 # ──────────────────────────────────────────────────────────────────
+
+def match_notification_topics(title: str, source: str = '') -> list:
+    """Accurately classify headline into smart notification topics using source feeds and regex word boundaries."""
+    source_lower = (source or '').lower()
+    title_lower = (title or '').lower()
+    combined = f"{source_lower} {title_lower}"
+    matched = []
+
+    # Category feed direct matches
+    if 'startups' in source_lower:
+        matched.append('Startups')
+    if 'venture' in source_lower:
+        matched.append('Venture')
+    if 'security' in source_lower:
+        matched.append('Security')
+    if 'techcrunch ai' in source_lower or 'artificial intelligence' in source_lower:
+        matched.append('AI')
+
+    for category, keywords in NOTIFICATION_KEYWORDS.items():
+        if category in matched:
+            continue
+        for kw in keywords:
+            if ' ' in kw or '-' in kw:
+                if kw in combined:
+                    matched.append(category)
+                    break
+            else:
+                if re.search(r'\b' + re.escape(kw) + r'\b', combined):
+                    matched.append(category)
+                    break
+    return matched
 
 def reportToGateway(flow, reply, mobile=''):
     """Report bot events to local gateway so they appear on http://localhost:8080"""
@@ -48,19 +88,108 @@ def saveHitsToDb(hits):
     """Save fetched news hits to SQLite database so the local website is updated."""
     try:
         import sqlite3
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+        except Exception:
+            pass
         conn.execute("""CREATE TABLE IF NOT EXISTS headlines (
-            id INTEGER PRIMARY KEY, title TEXT, url TEXT, time INTEGER, score INTEGER, author TEXT)""")
+            id INTEGER PRIMARY KEY, title TEXT, url TEXT, time INTEGER, score INTEGER, author TEXT, source TEXT)""")
         for hit in hits:
             if not hit.get("title") or not hit.get("objectID"):
                 continue
             row = (int(hit["objectID"]), hit.get("title"), hit.get("url"),
-                   hit.get("created_at_i"), hit.get("points"), hit.get("author"))
-            conn.execute("INSERT OR IGNORE INTO headlines VALUES (?,?,?,?,?,?)", row)
+                   hit.get("created_at_i"), hit.get("points"), hit.get("author"), "HN")
+            conn.execute("INSERT OR IGNORE INTO headlines (id, title, url, time, score, author, source) VALUES (?,?,?,?,?,?,?)", row)
+        conn.commit()
+        # Enforce max 100 stories in DB
+        conn.execute("""
+            DELETE FROM headlines WHERE id NOT IN (
+                SELECT id FROM headlines ORDER BY time DESC LIMIT 100
+            )
+        """)
         conn.commit()
         conn.close()
     except Exception as e:
         print('[saveHitsToDb error]:', e)
+
+def _format_flow_data(target_flow, admin_flows, reply_data):
+    """Format reply_data into a type-safe dictionary matching the Cosmitude flow's exact controls.
+    Prevents blank rendering crashes caused by invalid data types or missing fields in Angular/React components."""
+    if isinstance(reply_data, dict):
+        return reply_data
+
+    flow_obj = admin_flows.get(target_flow, {})
+    formats = flow_obj.get('Formats', [])
+    if not formats:
+        return str(reply_data)
+
+    fmt_name = formats[0]
+    fmt_obj = admin_flows.get(fmt_name, {})
+    data_dict = {}
+
+    msg_str = str(reply_data)
+    def b64(val):
+        return base64.b64encode(str(val).encode('utf-8')).decode('utf-8')
+
+    # Explicit 8-field schema implementation for RealTimeUpdates (Image 3 & Image 4)
+    if 'RealTimeUpdates' in target_flow:
+        data_dict[f"{fmt_name}_2"] = b64('WebSockets')
+        data_dict[f"{fmt_name}_4"] = b64('30')
+        data_dict[f"{fmt_name}_6"] = b64('http://localhost:8080/headlines/stream')
+        data_dict[f"{fmt_name}_8"] = b64('30')
+        data_dict[f"{fmt_name}_10"] = b64('Breaking Tech News, AI Alerts, Crypto Monitoring & Live Polling')
+        data_dict[f"{fmt_name}_12"] = b64('Server-Sent Events')
+        data_dict[f"{fmt_name}_14"] = b64('Active SSE Client Subscription (http://localhost:8080/headlines/stream)')
+        data_dict[f"{fmt_name}_16"] = b64(msg_str)
+        return data_dict
+
+    controls = []
+    for r_k, r_v in fmt_obj.items():
+        if isinstance(r_v, dict):
+            for c_k, c_v in r_v.items():
+                if isinstance(c_v, dict) and c_v.get('type') == 'LABEL':
+                    assoc = c_v.get('Associated', [])
+                    if assoc and 'ID' in assoc[0]:
+                        assoc_id = assoc[0]['ID']
+                        col_idx = assoc_id.split('_')[-1]
+                        ctrl = r_v.get(col_idx, {})
+                        controls.append({
+                            'id': assoc_id,
+                            'name': c_v.get('Name', ''),
+                            'type': assoc[0].get('Type', ''),
+                            'options': ctrl.get('Options', [])
+                        })
+
+    target_text_field = controls[-1]['id'] if controls else None
+    for c in reversed(controls):
+        if c['type'] in ('TEXTAREA', 'INPUT'):
+            target_text_field = c['id']
+            break
+
+    for c in controls:
+        fid = c['id']
+        ftype = c['type']
+        fopts = c['options']
+        fname = c['name']
+
+        if fid == target_text_field:
+            data_dict[fid] = b64(msg_str)
+        elif ftype == 'DDM':
+            val = fopts[0] if fopts else 'Default'
+            data_dict[fid] = b64(val)
+        elif ftype == 'NUMBERBOX':
+            data_dict[fid] = b64('30')
+        elif ftype == 'URL':
+            data_dict[fid] = b64('http://localhost:8080')
+        elif ftype == 'CALENDAR':
+            data_dict[fid] = b64(datetime.utcnow().strftime('%d/%m/%Y'))
+        elif ftype == 'CHECKBOX':
+            data_dict[fid] = b64('1')
+        else:
+            data_dict[fid] = b64(f"{fname}: active")
+
+    return data_dict if data_dict else str(reply_data)
 
 def sendBridge(bridgeData, replyFlow, replyData):
     """Send formatted response or live news update back to Cosmitude Bridge cloud platform."""
@@ -78,52 +207,63 @@ def sendBridge(bridgeData, replyFlow, replyData):
         jsonData = json.loads(content)
         
         adminFlows = jsonData.get('AdminFlow', {})
-        if replyFlow in adminFlows:
-            FID = adminFlows[replyFlow]["FID"]
+        targetFlow = replyFlow
+        if targetFlow not in adminFlows and f"{TemplateID}_{replyFlow}" in adminFlows:
+            targetFlow = f"{TemplateID}_{replyFlow}"
+
+        if targetFlow in adminFlows:
+            FID = adminFlows[targetFlow]["FID"]
         else:
-            firstKey = list(adminFlows.keys())[0] if adminFlows else replyFlow
+            firstKey = list(adminFlows.keys())[0] if adminFlows else targetFlow
             FID = adminFlows.get(firstKey, {}).get("FID", "")
 
-        tempJson ={
-        "ForumID": ForumID,
-        "SessionID": Sessionid,
-        "MACAddress": 'Bridge-Web',
-        "Time": str(int(time.time() * 1000)),
-        "ScheduledDateTime": "now",
-        "ScheduledBoolean": 0,
-        "FlowID": replyFlow,
-        "EnableChat": 1,
-        "FlowType": "Custom",
-        "BridgeForward": 0,
-        "TemplateID": TemplateID,
-        "TextCount": 1,
-        "ImageCount": 1,
-        "InvoiceID": "",
-        "DocumentCount": 0,
-        "User": False,
-        "VideoCount": 0,
-        "ReplyBridgeID": "",
-        "HiddenFlow": False,
-        "TempBridgeId": str(uuid.uuid4()),
-        replyFlow: replyData,
-        "FID": FID,
-        "ServerID":'c9b6722d-5dbf-4b4f-a28e-692b4d26c1cf-7870eb8e-2f45-458a-9a70-d6b2d71ee871',
-        "SentTo":'0'
+        flow_payload = _format_flow_data(targetFlow, adminFlows, replyData)
+
+        tempJson = {
+            "ForumID": ForumID,
+            "SessionID": Sessionid,
+            "MACAddress": 'Bridge-Web',
+            "Time": str(int(time.time() * 1000)),
+            "ScheduledDateTime": "now",
+            "ScheduledBoolean": 0,
+            "FlowID": targetFlow,
+            "EnableChat": 1,
+            "FlowType": "Custom",
+            "BridgeForward": 0,
+            "TemplateID": TemplateID,
+            "TextCount": 1,
+            "ImageCount": 1,
+            "InvoiceID": "",
+            "DocumentCount": 0,
+            "User": False,
+            "VideoCount": 0,
+            "ReplyBridgeID": "",
+            "HiddenFlow": False,
+            "TempBridgeId": str(uuid.uuid4()),
+            "FID": FID,
+            "ServerID": 'c9b6722d-5dbf-4b4f-a28e-692b4d26c1cf-7870eb8e-2f45-458a-9a70-d6b2d71ee871',
+            "SentTo": '0',
+            targetFlow: flow_payload,
+            replyFlow: flow_payload
         }
-        variab = {"Data":json.dumps(tempJson)}
+        # Also spread field values at top level so both client-side and server-side parsers find them
+        if isinstance(flow_payload, dict):
+            tempJson.update(flow_payload)
+        variab = {"Data": json.dumps(tempJson)}
         up = {}
-        response = requests.post('https://ca.cosmitude.com/' + 'bridgeSendingToForum', files=up, data=variab, timeout=600)
-        print(f"[sendBridge] Sent to {replyFlow}: {response.status_code}")
+        response = requests.post('https://ca.cosmitude.com/' + 'bridgeSendingToForum', files=up, data=variab, timeout=25)
+        print(f"[sendBridge] Sent to {targetFlow}: {response.status_code} -> {response.text[:120]}")
     except Exception as e:
         print("[sendBridge error]:", e)
 
 def listen_for_live_news():
-    """Background listener: evaluates smart notification keyword filters and pushes targeted alerts."""
+    """Background listener: evaluates smart notification keyword filters and pushes targeted alerts.
+    Only sends to Cosmitude Bridge when a truly NEW story arrives (deduplicated by story URL/ID)."""
     time.sleep(3)
     print('[live-listener] Started listening for new news to auto-push & evaluate smart notification filters...')
     while True:
         try:
-            r = requests.get(GATEWAY + '/api/headlines/stream', stream=True, timeout=(5, 60))
+            r = requests.get(GATEWAY + '/api/headlines/stream', stream=True, timeout=(5, None))
             for line in r.iter_lines():
                 if not line:
                     continue
@@ -132,25 +272,34 @@ def listen_for_live_news():
                     raw_json = line_str[6:].strip()
                     try:
                         item = json.loads(raw_json)
+                        story_id = item.get('id') or item.get('url') or item.get('title', '')
                         title = item.get('title', 'No Title')
                         url = item.get('url') or 'no link'
-                        t_lower = title.lower()
+                        source = item.get('source') or 'HN'
 
-                        matched_topics = []
-                        for category, keywords in NOTIFICATION_KEYWORDS.items():
-                            if any(k in t_lower for k in keywords):
-                                matched_topics.append(category)
+                        # Dedup: skip stories already sent to bridge this session
+                        with _bridge_sent_lock:
+                            if story_id in _bridge_sent_ids:
+                                continue
+                            _bridge_sent_ids.add(story_id)
+                            # Update last live news for status reporting
+                            _last_live_news['title'] = title
+                            _last_live_news['url'] = url
+                            _last_live_news['source'] = source
+
+                        matched_topics = match_notification_topics(title, source)
 
                         if matched_topics:
                             topic_str = ", ".join(matched_topics)
-                            msg = f"SMART NOTIFICATION [{topic_str}]\nHeadline: {title}\nLink: {url}"
-                            print(f"[smart-notification] Matched {topic_str}: {title}")
+                            msg = f"[{source}] SMART NOTIFICATION [{topic_str}]\nHeadline: {title}\nLink: {url}"
+                            print(f"[smart-notification] Matched {topic_str} ({source}): {title}")
                             reportToGateway(f"SmartNotify:{topic_str}", msg)
                             sendBridge(None, 'RealTimeUpdates', msg)
                         else:
-                            msg = f"Headline: {title}\nLink: {url}"
-                            print(f"[live-listener] New story detected: {title}")
-                            reportToGateway('New News', msg)
+                            msg = f"[{source}] Headline: {title}\nLink: {url}"
+                            print(f"[live-listener] New story -> Bridge ({source}): {title}")
+                            flow_label = f"{source} News" if source != 'HN' else 'New News'
+                            reportToGateway(flow_label, msg)
                             sendBridge(None, 'RealTimeUpdates', msg)
                     except Exception as parse_err:
                         print('[live-listener] Error parsing SSE json:', parse_err)
@@ -267,7 +416,23 @@ def handle_DatabaseSchema():
     return 'Schema: headlines (id, title, url, time, score, author), crypto_prices (coin_id, symbol, name, price, change_1h, change_24h, change_7d, market_cap, volume, ts).'
 
 def handle_RealTimeUpdates():
-    return 'Real-Time Updates active via SSE stream.'
+    """Returns status of last live news pushed; used only when a user explicitly requests this flow."""
+    with _bridge_sent_lock:
+        t = _last_live_news.get('title', '')
+        u = _last_live_news.get('url', '')
+        s = _last_live_news.get('source', 'HN')
+    if t:
+        return f"[{s}] Latest: {t}\nLink: {u}"
+    return 'Real-Time Updates active. Waiting for live news from sources...'
+
+def handle_WebSockets():
+    return 'WebSockets / Live streaming: Server-Sent Events (SSE) active on /headlines/stream and /api/crypto/stream.'
+
+def handle_PollingMechanism():
+    return 'Polling: Algolia HN + RSS feeds polled every 30s-300s. Sliding window maintains 100 stories.'
+
+def handle_RESTfulAPIs():
+    return 'REST APIs: GET /headlines, GET /api/crypto, GET /api/bot-events, POST /api/summarize, POST /api/explain.'
 
 def handle_GithubTrending():
     return openApi2_github(None)
@@ -281,6 +446,9 @@ FLOW_HANDLERS = {
     'DatabaseSelection': handle_DatabaseSelection,
     'DatabaseSchema':    handle_DatabaseSchema,
     'RealTimeUpdates':   handle_RealTimeUpdates,
+    'WebSockets':        handle_WebSockets,
+    'PollingMechanism':  handle_PollingMechanism,
+    'RESTfulAPIs':       handle_RESTfulAPIs,
     'GithubTrending':    handle_GithubTrending,
     'HNByDate':          handle_HNByDate,
 }
@@ -288,6 +456,8 @@ FLOW_HANDLERS = {
 def go():
     try:
         login()
+        time.sleep(2)
+
         threading.Thread(target=listen_for_live_news, daemon=True).start()
         threading.Thread(target=monitor_crypto_alerts, daemon=True).start()
         
@@ -304,24 +474,30 @@ def login():
         global username
         global MobileNumber
         global forumID
+        uname = os.environ["COSMITUDE_USERNAME"]
+        pword = os.environ["COSMITUDE_PASSWORD"]
         tempJson = {
-        "MACAddress": 'Bridge-Web',
-        "UserName": os.environ["COSMITUDE_USERNAME"],
-        "Password": os.environ["COSMITUDE_PASSWORD"],
-        "ServerID":'c9b6722d-5dbf-4b4f-a28e-692b4d26c1cf-7870eb8e-2f45-458a-9a70-d6b2d71ee871'
+            "MACAddress": 'Bridge-Web',
+            "UserName": uname,
+            "Password": pword,
+            "ServerID": 'c9b6722d-5dbf-4b4f-a28e-692b4d26c1cf-7870eb8e-2f45-458a-9a70-d6b2d71ee871'
         }
         headers = {'Content-Type': 'application/json'}
-        variab =json.dumps(tempJson)
-        response = requests.post('https://ca.cosmitude.com/' + 'loginForDevice', data=variab,headers=headers, timeout=600)
+        variab = json.dumps(tempJson)
+        response = requests.post('https://ca.cosmitude.com/' + 'loginForDevice', data=variab, headers=headers, timeout=25)
         strData = str(response.text)
         respJson = json.loads(strData)
-        Sessionid = respJson['ErrorMessage']['SessionID']
-        countryCode = MobileNumber = respJson['ErrorMessage']['CountryCode']
-        MobileNumber = countryCode+respJson['ErrorMessage']['MobileNumber']
-        print(f"[Cosmitude Login] Success! SessionID: {Sessionid}")
-        getForumDetails()
+        if 'ErrorMessage' in respJson and isinstance(respJson['ErrorMessage'], dict):
+            Sessionid = respJson['ErrorMessage']['SessionID']
+            countryCode = respJson['ErrorMessage'].get('CountryCode', '')
+            mob = respJson['ErrorMessage'].get('MobileNumber', '')
+            MobileNumber = countryCode + mob
+            print(f"[Cosmitude Login] Success! SessionID: {Sessionid}")
+            getForumDetails()
+        else:
+            print(f"[Cosmitude Login] Response: {respJson}")
     except Exception as e:
-        print (e)
+        print("[Cosmitude Login error]:", e)
         return e
 
 def getForumDetails():
@@ -334,7 +510,7 @@ def getForumDetails():
         }
         headers = {'Content-Type': 'application/json'}
         variab =json.dumps(tempJson)
-        response = requests.post('https://ca.cosmitude.com/' + 'getRequestedForumDetails', data=variab,headers=headers, timeout=600)
+        response = requests.post('https://ca.cosmitude.com/' + 'getRequestedForumDetails', data=variab,headers=headers, timeout=25)
         if response.status_code == 200:
             responseStr = str(response.text)
             respJson = json.loads(responseStr)
@@ -361,6 +537,8 @@ def get_handler_for_flow(flow_name):
     return None
 
 def clienntSync():
+    if not Sessionid:
+        return
     try:
         clientSyncJson = {
         "SessionID":Sessionid,
@@ -370,7 +548,7 @@ def clienntSync():
         }
         headers = {'Content-Type': 'application/json'}
         variab =json.dumps(clientSyncJson)
-        response = requests.post('https://ca.cosmitude.com/' + 'syncUserData', data=variab,headers=headers, timeout=600)
+        response = requests.post('https://ca.cosmitude.com/' + 'syncUserData', data=variab,headers=headers, timeout=25)
         strData = str(response.text)
         dataRead = json.loads(strData)
         
@@ -402,6 +580,12 @@ def clienntSync():
                         t1 = Thread(target=lambda q, arg1: q.put(openApi2_hn_bydate(arg1)), args=(que1, bridgeData))
                         t1.start()
                     else:
+                        # RealTimeUpdates is driven by listen_for_live_news only.
+                        # Don't auto-send bridge messages from sync — only respond to
+                        # explicit user-triggered requests for other flows.
+                        if 'RealTimeUpdates' in flowName:
+                            print(f"[sync] Skipping auto-bridge for {flowName!r} — handled by live-listener")
+                            continue
                         handler = get_handler_for_flow(flowName)
                         replyText = handler() if handler else f"Processed operation for {flowName}"
                         reportToGateway(flowName, replyText, mNumber)
@@ -432,22 +616,37 @@ def openApi1(bridgeData):
             top_title = hits[0].get('title', '')
             reportToGateway('NewsAPIs', f"Fetched {len(hits)} hits. Top: {top_title}")
         
+        # DatabaseSchema fields (top-level, not nested under flow name):
+        # _2  = INPUT    = Headline Field
+        # _4  = CALENDAR = Publication Date Field
+        # _6  = INPUT    = Source Field
+        # _8  = TEXTAREA = Metadata Fields
+        # _10 = NUMBERBOX= Schema Version
+        # _12 = URL      = Schema Documentation
+        # _14 = CHECKBOX = Normalization
+        # _16 = TEXTAREA = Schema Updates Log (main content visible to users)
+        from datetime import datetime as _dt
+        _pfx = 'NewsSystemTemplate_DatabaseSchema_Main-dc03e037-1831-4e97-9ef3-428424bf6b70'
+        top_titles = '; '.join([h.get('title', '') for h in hits[:5] if h.get('title')])
         sendData = {
-            'NewsSystemTemplate_DatabaseSchema_Main-dc03e037-1831-4e97-9ef3-428424bf6b70_2' : base64.b64encode(str(hits).encode("utf-8")).decode("utf-8"),
-            'NewsSystemTemplate_DatabaseSchema_Main-dc03e037-1831-4e97-9ef3-428424bf6b70_4' : base64.b64encode(str(hits).encode("utf-8")).decode("utf-8"),
-            'NewsSystemTemplate_DatabaseSchema_Main-dc03e037-1831-4e97-9ef3-428424bf6b70_6' : base64.b64encode(str(hits).encode("utf-8")).decode("utf-8"),
-            'NewsSystemTemplate_DatabaseSchema_Main-dc03e037-1831-4e97-9ef3-428424bf6b70_8' : base64.b64encode(str(hits).encode("utf-8")).decode("utf-8"),
-            'NewsSystemTemplate_DatabaseSchema_Main-dc03e037-1831-4e97-9ef3-428424bf6b70_10' : base64.b64encode(''.encode("utf-8")).decode("utf-8"),
-            'NewsSystemTemplate_DatabaseSchema_Main-dc03e037-1831-4e97-9ef3-428424bf6b70_12' : base64.b64encode(''.encode("utf-8")).decode("utf-8"),
-            'NewsSystemTemplate_DatabaseSchema_Main-dc03e037-1831-4e97-9ef3-428424bf6b70_16' : base64.b64encode(''.encode("utf-8")).decode("utf-8")}
+            _pfx + '_2':  base64.b64encode(top_titles.encode('utf-8')).decode('utf-8'),
+            _pfx + '_4':  base64.b64encode(_dt.utcnow().strftime('%d/%m/%Y').encode('utf-8')).decode('utf-8'),
+            _pfx + '_6':  base64.b64encode('HN / TechCrunch / Verge / Ars'.encode('utf-8')).decode('utf-8'),
+            _pfx + '_8':  base64.b64encode(f"{len(hits)} stories fetched".encode('utf-8')).decode('utf-8'),
+            _pfx + '_10': base64.b64encode('1'.encode('utf-8')).decode('utf-8'),
+            _pfx + '_12': base64.b64encode('http://localhost:8080'.encode('utf-8')).decode('utf-8'),
+            _pfx + '_14': base64.b64encode('1'.encode('utf-8')).decode('utf-8'),
+            _pfx + '_16': base64.b64encode(top_titles.encode('utf-8')).decode('utf-8'),
+        }
             
         que = Queue.Queue()
-        t = Thread(target=lambda q, arg1,arg2,arg3: q.put(sendBridge(arg1,arg2,arg3)), args=(que,bridgeData,'NewsSystemTemplate_DatabaseSchema',sendData))
+        t = Thread(target=lambda q, arg1, arg2, arg3: q.put(sendBridge(arg1, arg2, arg3)), args=(que, bridgeData, 'NewsSystemTemplate_DatabaseSchema', sendData))
         t.start()
         print(f"[openApi1] Processed {len(hits)} hits and queued sendBridge")
     except Exception as e:
         print("[openApi1 error]:", e)
 
-go()
+if __name__ == '__main__':
+    go()
 
 #End of bot code
